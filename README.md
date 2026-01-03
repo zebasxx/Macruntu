@@ -26,3 +26,19 @@ Create a custom shortcut in GNOME Settings and point it to:
 ```bash
 python3 /home/seb/Code/GitHub/Macruntu/macruntu.py
 ```
+
+## Desktop entry (fix Dock icon)
+
+Copy the desktop file so GNOME can pick up the app icon:
+
+```bash
+mkdir -p ~/.local/share/applications
+cp /home/seb/Code/GitHub/Macruntu/com.seb.Macruntu.desktop ~/.local/share/applications/
+update-desktop-database ~/.local/share/applications
+```
+
+Launch via the app menu or:
+
+```bash
+gtk-launch com.seb.Macruntu
+```

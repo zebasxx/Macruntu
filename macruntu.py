@@ -57,6 +57,7 @@ class MacruntuApp(Gtk.Application):
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
+        Gtk.Window.set_default_icon_name("edit-paste")
         self._setup_tray()
 
     def do_activate(self):
@@ -103,24 +104,17 @@ class MacruntuApp(Gtk.Application):
         self.quit()
 
     def _build_ui(self):
-        self.parent_window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        self.parent_window.set_application(self)
-        self.parent_window.set_decorated(False)
-        self.parent_window.set_skip_taskbar_hint(True)
-        self.parent_window.set_skip_pager_hint(True)
-        self.parent_window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
-        self.parent_window.set_default_size(1, 1)
-
-        self.window = Gtk.Window(type=Gtk.WindowType.POPUP)
+        self.window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         self.window.set_application(self)
-        self.window.set_transient_for(self.parent_window)
         self.window.set_title(APP_NAME)
+        self.window.set_icon_name("edit-paste")
+        self.window.set_wmclass(APP_NAME, APP_NAME)
         self.window.set_default_size(520, 420)
         self.window.set_position(Gtk.WindowPosition.CENTER)
         self.window.set_decorated(False)
         self.window.set_skip_taskbar_hint(True)
         self.window.set_skip_pager_hint(True)
-        self.window.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        self.window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         root.set_border_width(12)
