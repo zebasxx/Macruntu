@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 import gi
@@ -40,15 +42,20 @@ def load_config():
 
 class MacruntuApp(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        super().__init__(
+            application_id=APP_ID,
+            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE | Gio.ApplicationFlags.HANDLES_OPEN,
+        )
         self.window = None
         self.parent_window = None
         self.entry = None
         self.history_list = []
         self.history_box = None
         self.clipboard = None
+        self.primary_clipboard = None
         self.config = load_config()
         self.indicator = None
+        self.wl_copy_path = shutil.which("wl-copy")
         self.secret_texts = {
             macro.get("text", "")
             for macro in self.config.get("macros", [])
@@ -58,6 +65,9 @@ class MacruntuApp(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
         Gtk.Window.set_default_icon_name("edit-paste")
+        self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        self.primary_clipboard = Gtk.Clipboard.get(Gdk.SELECTION_PRIMARY)
+        self.clipboard.connect("owner-change", self._on_clipboard_owner_change)
         self._setup_tray()
 
     def do_activate(self):
@@ -67,8 +77,21 @@ class MacruntuApp(Gtk.Application):
         self.window.present()
 
     def do_command_line(self, command_line):
+        macro_index = self._parse_macro_from_args(command_line.get_arguments()[1:])
+        if macro_index is not None:
+            self._apply_macro_index(macro_index)
+            return 0
         self.activate()
         return 0
+
+    def do_open(self, files, _n_files, _hint):
+        for entry in files:
+            uri = entry.get_uri()
+            macro_index = self._parse_macro_from_args([uri])
+            if macro_index is not None:
+                self._apply_macro_index(macro_index)
+                return
+        self.activate()
 
     def _setup_tray(self):
         self.indicator = AyatanaAppIndicator3.Indicator.new(
@@ -148,6 +171,7 @@ class MacruntuApp(Gtk.Application):
         history_scroller.set_vexpand(True)
         history_scroller.add(self.history_box)
         root.pack_start(history_scroller, True, True, 0)
+        self._render_history()
 
         macros_label = Gtk.Label(label="Macros")
         macros_label.set_xalign(0.0)
@@ -170,16 +194,47 @@ class MacruntuApp(Gtk.Application):
             col = index % 2
             macros_grid.attach(button, col, row, 1, 1)
 
-        self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        self.clipboard.connect("owner-change", self._on_clipboard_owner_change)
         self._pull_clipboard()
+
+    def _parse_macro_from_args(self, args):
+        for arg in args:
+            if arg.startswith("--macro="):
+                return self._safe_index(arg.split("=", 1)[1])
+            if arg == "--macro":
+                continue
+            if arg.startswith("macruntu://macro/"):
+                return self._safe_index(arg.rsplit("/", 1)[-1])
+            if arg.startswith("macro:"):
+                return self._safe_index(arg.split(":", 1)[1])
+        if "--macro" in args:
+            idx = args.index("--macro")
+            if idx + 1 < len(args):
+                return self._safe_index(args[idx + 1])
+        return None
+
+    def _safe_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return None
+        if index < 1:
+            return None
+        return index
+
+    def _apply_macro_index(self, index):
+        macros = self.config.get("macros", [])
+        if index > len(macros):
+            return
+        macro = macros[index - 1]
+        self._apply_macro(None, macro.get("text", ""), bool(macro.get("secret", False)))
 
     def _apply_macro(self, _button, text, secret):
         if not text:
             return
-        self.clipboard.set_text(text, -1)
+        self._set_clipboard_text(text)
         if secret:
-            self.entry.set_text("Secret copied")
+            if self.entry:
+                self.entry.set_text("Secret copied")
             return
         self._update_history(text)
 
@@ -188,6 +243,23 @@ class MacruntuApp(Gtk.Application):
 
     def _pull_clipboard(self):
         self.clipboard.request_text(self._on_clipboard_text)
+
+    def _set_clipboard_text(self, text):
+        # Update both CLIPBOARD and PRIMARY for terminal paste compatibility.
+        if self.wl_copy_path:
+            self._run_wl_copy(text, primary=False)
+            self._run_wl_copy(text, primary=True)
+        self.clipboard.set_text(text, -1)
+        self.clipboard.store()
+        if self.primary_clipboard:
+            self.primary_clipboard.set_text(text, -1)
+            self.primary_clipboard.store()
+
+    def _run_wl_copy(self, text, primary):
+        args = [self.wl_copy_path]
+        if primary:
+            args.append("--primary")
+        subprocess.run(args, input=text, text=True, check=False)
 
     def _on_clipboard_text(self, _clipboard, text):
         if text is None:
@@ -204,8 +276,10 @@ class MacruntuApp(Gtk.Application):
             return
         self.history_list.insert(0, trimmed)
         self.history_list = self.history_list[:HISTORY_LIMIT]
-        self.entry.set_text(trimmed)
-        self._render_history()
+        if self.entry:
+            self.entry.set_text(trimmed)
+        if self.history_box:
+            self._render_history()
 
     def _render_history(self):
         for child in self.history_box.get_children():

@@ -10,6 +10,12 @@ Install the GTK and Ayatana AppIndicator bindings:
 sudo apt install -y python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
 ```
 
+For reliable clipboard updates from shortcuts on Wayland, install wl-clipboard:
+
+```bash
+sudo apt install -y wl-clipboard
+```
+
 ## Run
 
 ```bash
@@ -42,3 +48,13 @@ Launch via the app menu or:
 ```bash
 gtk-launch com.seb.Macruntu
 ```
+
+## Macro shortcuts
+
+You can trigger macros without opening the UI by launching with a macro URI:
+
+```bash
+gtk-launch com.seb.Macruntu macruntu://macro/1
+```
+
+Create a GNOME custom shortcut with that command to bind `Ctrl+1` to the first macro.
