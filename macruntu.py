@@ -19,7 +19,6 @@ CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "macruntu")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 AUTOSTART_DIR = os.path.join(os.path.expanduser("~"), ".config", "autostart")
 AUTOSTART_PATH = os.path.join(AUTOSTART_DIR, f"{APP_ID}.desktop")
-HISTORY_LIMIT = 5
 
 
 DEFAULT_CONFIG = {
@@ -58,8 +57,6 @@ class MacruntuApp(Gtk.Application):
         self.window = None
         self.parent_window = None
         self.entry = None
-        self.history_list = []
-        self.history_box = None
         self.clipboard = None
         self.primary_clipboard = None
         self.config = load_config()
@@ -157,7 +154,7 @@ class MacruntuApp(Gtk.Application):
         self.window.set_title(APP_NAME)
         self.window.set_icon_name("edit-paste")
         self.window.set_wmclass(APP_NAME, APP_NAME)
-        self.window.set_default_size(520, 420)
+        self.window.set_default_size(520, 260)
         self.window.set_position(Gtk.WindowPosition.CENTER)
         self.window.set_decorated(False)
         self.window.set_skip_taskbar_hint(True)
@@ -186,18 +183,6 @@ class MacruntuApp(Gtk.Application):
         self.entry.set_placeholder_text("Latest clipboard text…")
         root.pack_start(self.entry, False, False, 0)
 
-        history_label = Gtk.Label(label="Recent clipboard history")
-        history_label.set_xalign(0.0)
-        root.pack_start(history_label, False, False, 0)
-
-        self.history_box = Gtk.ListBox()
-        self.history_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        history_scroller = Gtk.ScrolledWindow()
-        history_scroller.set_vexpand(True)
-        history_scroller.add(self.history_box)
-        root.pack_start(history_scroller, True, True, 0)
-        self._render_history()
-
         macros_label = Gtk.Label(label="Macros")
         macros_label.set_xalign(0.0)
         root.pack_start(macros_label, False, False, 0)
@@ -214,8 +199,8 @@ class MacruntuApp(Gtk.Application):
                 self._apply_macro,
                 macro,
             )
-            row = index // 2
-            col = index % 2
+            row = index // 1
+            col = index % 1
             macros_grid.attach(button, col, row, 1, 1)
 
         autostart_checkbox = Gtk.CheckButton.new_with_label("Start at login")
@@ -267,11 +252,14 @@ class MacruntuApp(Gtk.Application):
 
     def _apply_macro(self, _button, macro):
         text = macro.get("text", "")
-        if not text:
+        if not text and not macro.get("paste", False):
             return
         secret = bool(macro.get("secret", False))
-        self._set_clipboard_text(text)
+        if text:
+            self._set_clipboard_text(text)
         self._auto_paste(macro)
+        if not text:
+            return
         if secret:
             if self.entry:
                 self.entry.set_text("Secret copied")
@@ -486,26 +474,8 @@ class MacruntuApp(Gtk.Application):
         trimmed = text.strip()
         if not trimmed:
             return
-        if self.history_list and self.history_list[0] == trimmed:
-            return
-        self.history_list.insert(0, trimmed)
-        self.history_list = self.history_list[:HISTORY_LIMIT]
         if self.entry:
             self.entry.set_text(trimmed)
-        if self.history_box:
-            self._render_history()
-
-    def _render_history(self):
-        for child in self.history_box.get_children():
-            self.history_box.remove(child)
-        for item in self.history_list:
-            row = Gtk.ListBoxRow()
-            label = Gtk.Label(label=item)
-            label.set_xalign(0.0)
-            label.set_line_wrap(True)
-            row.add(label)
-            self.history_box.add(row)
-        self.history_box.show_all()
 
     def _on_header_press(self, _widget, event):
         if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
