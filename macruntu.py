@@ -17,6 +17,8 @@ APP_ID = "com.seb.Macruntu"
 APP_NAME = "Macruntu"
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "macruntu")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+AUTOSTART_DIR = os.path.join(os.path.expanduser("~"), ".config", "autostart")
+AUTOSTART_PATH = os.path.join(AUTOSTART_DIR, f"{APP_ID}.desktop")
 HISTORY_LIMIT = 5
 
 
@@ -27,7 +29,8 @@ DEFAULT_CONFIG = {
         {"label": "Address", "text": "221B Baker Street, London"},
         {"label": "Signature", "text": "Best regards,\nSeb"},
         {"label": "API Key", "text": "REPLACE_ME", "secret": True},
-    ]
+    ],
+    "autostart": False,
 }
 
 
@@ -38,7 +41,12 @@ def load_config():
             json.dump(DEFAULT_CONFIG, handle, indent=2)
         return DEFAULT_CONFIG
     with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+        config = json.load(handle)
+    if "macros" not in config:
+        config["macros"] = DEFAULT_CONFIG["macros"]
+    if "autostart" not in config:
+        config["autostart"] = DEFAULT_CONFIG["autostart"]
+    return config
 
 
 class MacruntuApp(Gtk.Application):
@@ -60,11 +68,17 @@ class MacruntuApp(Gtk.Application):
         self.wtype_path = shutil.which("wtype")
         self.xdotool_path = shutil.which("xdotool")
         self.ydotool_path = shutil.which("ydotool")
+        self.start_hidden = False
         self.secret_texts = {
             macro.get("text", "")
             for macro in self.config.get("macros", [])
             if macro.get("secret", False)
         }
+
+    def _save_config(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+            json.dump(self.config, handle, indent=2)
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -73,6 +87,8 @@ class MacruntuApp(Gtk.Application):
         self.primary_clipboard = Gtk.Clipboard.get(Gdk.SELECTION_PRIMARY)
         self.clipboard.connect("owner-change", self._on_clipboard_owner_change)
         self._setup_tray()
+        if self.config.get("autostart", False):
+            self._set_autostart_enabled(True)
 
     def do_activate(self):
         if not self.window:
@@ -81,9 +97,14 @@ class MacruntuApp(Gtk.Application):
         self.window.present()
 
     def do_command_line(self, command_line):
-        macro_index = self._parse_macro_from_args(command_line.get_arguments()[1:])
+        args = command_line.get_arguments()[1:]
+        self.start_hidden = self._has_hidden_flag(args)
+        macro_index = self._parse_macro_from_args(args)
         if macro_index is not None:
             self._apply_macro_index(macro_index)
+            return 0
+        if self.start_hidden:
+            self._ensure_hidden_window()
             return 0
         self.activate()
         return 0
@@ -197,7 +218,17 @@ class MacruntuApp(Gtk.Application):
             col = index % 2
             macros_grid.attach(button, col, row, 1, 1)
 
+        autostart_checkbox = Gtk.CheckButton.new_with_label("Start at login")
+        autostart_checkbox.set_active(bool(self.config.get("autostart", False)))
+        autostart_checkbox.connect("toggled", self._toggle_autostart)
+        root.pack_start(autostart_checkbox, False, False, 0)
+
         self._pull_clipboard()
+
+    def _ensure_hidden_window(self):
+        if not self.window:
+            self._build_ui()
+        self.window.hide()
 
     def _parse_macro_from_args(self, args):
         for arg in args:
@@ -214,6 +245,9 @@ class MacruntuApp(Gtk.Application):
             if idx + 1 < len(args):
                 return self._safe_index(args[idx + 1])
         return None
+
+    def _has_hidden_flag(self, args):
+        return "--hidden" in args or "--start-hidden" in args
 
     def _safe_index(self, value):
         try:
@@ -477,6 +511,48 @@ class MacruntuApp(Gtk.Application):
         if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
             self.window.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
         return True
+
+    def _toggle_autostart(self, checkbox):
+        enabled = checkbox.get_active()
+        self.config["autostart"] = enabled
+        self._save_config()
+        self._set_autostart_enabled(enabled)
+
+    def _set_autostart_enabled(self, enabled):
+        if enabled:
+            os.makedirs(AUTOSTART_DIR, exist_ok=True)
+            with open(AUTOSTART_PATH, "w", encoding="utf-8") as handle:
+                handle.write(self._autostart_desktop_entry())
+        else:
+            try:
+                os.remove(AUTOSTART_PATH)
+            except FileNotFoundError:
+                pass
+
+    def _autostart_desktop_entry(self):
+        script_path = os.path.realpath(__file__)
+        socket_path = os.environ.get("YDOTOOL_SOCKET")
+        if not socket_path and os.path.exists("/run/ydotoold/socket"):
+            socket_path = "/run/ydotoold/socket"
+        if socket_path:
+            exec_cmd = (
+                f"env YDOTOOL_SOCKET={shlex.quote(socket_path)} "
+                f"python3 {shlex.quote(script_path)} --hidden %u"
+            )
+        else:
+            exec_cmd = f"python3 {shlex.quote(script_path)} --hidden %u"
+        return "\n".join(
+            [
+                "[Desktop Entry]",
+                "Type=Application",
+                f"Name={APP_NAME}",
+                "Comment=Clipboard macros and history",
+                f"Exec={exec_cmd}",
+                "Terminal=false",
+                "X-GNOME-Autostart-enabled=true",
+                "",
+            ]
+        )
 
 
 def main():

@@ -117,6 +117,8 @@ Example:
 }
 ```
 
+Use the "Start at login" checkbox in the UI to create or remove the GNOME autostart entry. Autostart launches Macruntu hidden in the tray.
+
 ## Shortcut
 
 Create a custom shortcut in GNOME Settings and point it to (from the repo root):
