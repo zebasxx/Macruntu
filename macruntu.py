@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 
@@ -56,6 +57,9 @@ class MacruntuApp(Gtk.Application):
         self.config = load_config()
         self.indicator = None
         self.wl_copy_path = shutil.which("wl-copy")
+        self.wtype_path = shutil.which("wtype")
+        self.xdotool_path = shutil.which("xdotool")
+        self.ydotool_path = shutil.which("ydotool")
         self.secret_texts = {
             macro.get("text", "")
             for macro in self.config.get("macros", [])
@@ -187,8 +191,7 @@ class MacruntuApp(Gtk.Application):
             button.connect(
                 "clicked",
                 self._apply_macro,
-                macro.get("text", ""),
-                bool(macro.get("secret", False)),
+                macro,
             )
             row = index // 2
             col = index % 2
@@ -226,12 +229,15 @@ class MacruntuApp(Gtk.Application):
         if index > len(macros):
             return
         macro = macros[index - 1]
-        self._apply_macro(None, macro.get("text", ""), bool(macro.get("secret", False)))
+        self._apply_macro(None, macro)
 
-    def _apply_macro(self, _button, text, secret):
+    def _apply_macro(self, _button, macro):
+        text = macro.get("text", "")
         if not text:
             return
+        secret = bool(macro.get("secret", False))
         self._set_clipboard_text(text)
+        self._auto_paste(macro)
         if secret:
             if self.entry:
                 self.entry.set_text("Secret copied")
@@ -260,6 +266,180 @@ class MacruntuApp(Gtk.Application):
         if primary:
             args.append("--primary")
         subprocess.run(args, input=text, text=True, check=False)
+
+    def _auto_paste(self, macro):
+        if not macro.get("paste", False):
+            return
+        delay_ms = macro.get("paste_delay_ms", 150)
+        if isinstance(delay_ms, (int, float)) and delay_ms > 0:
+            GLib.timeout_add(int(delay_ms), self._auto_paste_now, macro)
+            return
+        self._auto_paste_now(macro)
+
+    def _auto_paste_now(self, macro):
+        paste_command = macro.get("paste_command")
+        if paste_command:
+            self._run_command(paste_command)
+            return False
+        key_combo = macro.get("paste_keys", "ctrl+v")
+        backend = macro.get("paste_backend")
+        session = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        if backend == "xdotool" and self.xdotool_path:
+            self._run_command([self.xdotool_path, "key", "--clearmodifiers", key_combo])
+            return False
+        if backend == "wtype" and self.wtype_path:
+            if self._run_wtype_combo(key_combo) == 0:
+                return False
+            return False
+        if backend == "ydotool" and self.ydotool_path:
+            self._run_ydotool_key_combo(key_combo)
+            return False
+        if session == "x11" and self.xdotool_path:
+            self._run_command([self.xdotool_path, "key", "--clearmodifiers", key_combo])
+            return False
+        if self.wtype_path:
+            key_data = self._parse_key_combo(key_combo)
+            if not key_data:
+                return False
+            key, modifiers = key_data
+            if self._run_wtype_combo(key_combo) == 0:
+                return False
+        if self.ydotool_path:
+            self._run_ydotool_key_combo(key_combo)
+        return False
+
+    def _parse_key_combo(self, combo):
+        if not combo:
+            return None
+        parts = [part.strip().lower() for part in combo.split("+") if part.strip()]
+        if not parts:
+            return None
+        key = parts[-1]
+        modifiers = parts[:-1]
+        allowed_mods = {"ctrl", "shift", "alt", "super"}
+        modifiers = [mod for mod in modifiers if mod in allowed_mods]
+        return key, modifiers
+
+    def _run_ydotool_key_combo(self, combo):
+        key_data = self._parse_key_combo(combo)
+        if not key_data:
+            return
+        key, modifiers = key_data
+        key_code = self._ydotool_keycode_for_key(key)
+        if key_code is None:
+            return
+        sequence = []
+        for mod in modifiers:
+            mod_code = self._ydotool_modifier_code(mod)
+            if mod_code is not None:
+                sequence.append(f"{mod_code}:1")
+        sequence.append(f"{key_code}:1")
+        sequence.append(f"{key_code}:0")
+        for mod in reversed(modifiers):
+            mod_code = self._ydotool_modifier_code(mod)
+            if mod_code is not None:
+                sequence.append(f"{mod_code}:0")
+        self._run_command([self.ydotool_path, "key", *sequence])
+
+    def _run_wtype_combo(self, combo):
+        key_data = self._parse_key_combo(combo)
+        if not key_data:
+            return 1
+        key, modifiers = key_data
+        args = [self.wtype_path]
+        for mod in modifiers:
+            args.extend(["-M", mod])
+        args.append(key)
+        for mod in reversed(modifiers):
+            args.extend(["-m", mod])
+        return self._run_command(args)
+
+    def _ydotool_modifier_code(self, modifier):
+        return {
+            "ctrl": 29,
+            "shift": 42,
+            "alt": 56,
+            "super": 125,
+        }.get(modifier)
+
+    def _ydotool_keycode_for_key(self, key):
+        if len(key) == 1 and "a" <= key <= "z":
+            letter_codes = {
+                "a": 30,
+                "b": 48,
+                "c": 46,
+                "d": 32,
+                "e": 18,
+                "f": 33,
+                "g": 34,
+                "h": 35,
+                "i": 23,
+                "j": 36,
+                "k": 37,
+                "l": 38,
+                "m": 50,
+                "n": 49,
+                "o": 24,
+                "p": 25,
+                "q": 16,
+                "r": 19,
+                "s": 31,
+                "t": 20,
+                "u": 22,
+                "v": 47,
+                "w": 17,
+                "x": 45,
+                "y": 21,
+                "z": 44,
+            }
+            return letter_codes.get(key)
+        if len(key) == 1 and "0" <= key <= "9":
+            digit_codes = {
+                "1": 2,
+                "2": 3,
+                "3": 4,
+                "4": 5,
+                "5": 6,
+                "6": 7,
+                "7": 8,
+                "8": 9,
+                "9": 10,
+                "0": 11,
+            }
+            return digit_codes.get(key)
+        named = {
+            "enter": 28,
+            "tab": 15,
+            "space": 57,
+            "esc": 1,
+            "escape": 1,
+            "backspace": 14,
+            "delete": 111,
+            "insert": 110,
+            "home": 102,
+            "end": 107,
+            "pageup": 104,
+            "pagedown": 109,
+            "up": 103,
+            "down": 108,
+            "left": 105,
+            "right": 106,
+        }
+        if key.startswith("f") and key[1:].isdigit():
+            fn = int(key[1:])
+            if 1 <= fn <= 12:
+                return 58 + (fn - 1)
+        return named.get(key)
+
+    def _run_command(self, command):
+        if isinstance(command, str):
+            args = shlex.split(command)
+        else:
+            args = command
+        if not args:
+            return 1
+        result = subprocess.run(args, check=False)
+        return result.returncode
 
     def _on_clipboard_text(self, _clipboard, text):
         if text is None:
