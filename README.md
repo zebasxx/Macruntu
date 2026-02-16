@@ -99,10 +99,12 @@ python3 macruntu.py
 
 The first run creates a config file at `~/.config/macruntu/config.json`. Edit it to customize macro buttons.
 Add `"secret": true` to a macro to keep it out of history and avoid showing it in the main textbox.
-Add `"paste": true` to auto-paste a macro after copying it. By default it uses `ctrl+v` via wtype (Wayland) or xdotool (X11).
-Use `"paste_keys"` to override the combo (e.g. `ctrl+shift+v` for terminals), or `"paste_command"` to run a custom command.
+Add `"paste": true` to auto-paste a macro by typing the text directly via wtype (Wayland), ydotool (Wayland), or xdotool (X11). This avoids touching the clipboard. If no typing backend is available, it falls back to `ctrl+v` using the clipboard.
+Use `"paste_keys"` to override the combo when falling back to clipboard paste (e.g. `ctrl+shift+v` for terminals), or `"paste_command"` to run a custom command.
 Use `"paste_delay_ms"` to wait a bit before pasting (helps keep focus in the target app).
 Use `"paste_backend"` to force a backend (`"ydotool"`, `"wtype"`, or `"xdotool"`). This is useful on GNOME Wayland where wtype may be blocked.
+By default, Macruntu restores the clipboard after a clipboard-based macro paste so your previous clipboard content is preserved. You can disable this globally with `"restore_clipboard_after_macro": false` or per macro with `"restore_clipboard": false`.
+Use `"restore_clipboard_delay_ms"` (global) or `"restore_delay_ms"` (per macro) to control how long it waits before restoring.
 
 Example:
 
@@ -113,7 +115,9 @@ Example:
   "paste": true,
   "paste_keys": "ctrl+shift+v",
   "paste_delay_ms": 200,
-  "paste_backend": "ydotool"
+  "paste_backend": "ydotool",
+  "restore_clipboard": true,
+  "restore_delay_ms": 300
 }
 ```
 

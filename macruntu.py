@@ -30,6 +30,8 @@ DEFAULT_CONFIG = {
         {"label": "API Key", "text": "REPLACE_ME", "secret": True},
     ],
     "autostart": False,
+    "restore_clipboard_after_macro": True,
+    "restore_clipboard_delay_ms": 250,
 }
 
 
@@ -45,6 +47,10 @@ def load_config():
         config["macros"] = DEFAULT_CONFIG["macros"]
     if "autostart" not in config:
         config["autostart"] = DEFAULT_CONFIG["autostart"]
+    if "restore_clipboard_after_macro" not in config:
+        config["restore_clipboard_after_macro"] = DEFAULT_CONFIG["restore_clipboard_after_macro"]
+    if "restore_clipboard_delay_ms" not in config:
+        config["restore_clipboard_delay_ms"] = DEFAULT_CONFIG["restore_clipboard_delay_ms"]
     return config
 
 
@@ -255,9 +261,25 @@ class MacruntuApp(Gtk.Application):
         if not text and not macro.get("paste", False):
             return
         secret = bool(macro.get("secret", False))
-        if text:
+        used_clipboard = False
+        restore_snapshot = None
+        restore_after = False
+        if not text and macro.get("paste", False):
+            self._auto_paste(macro)
+        elif text and macro.get("paste", False):
+            typed = self._auto_type_text(text, macro)
+            if not typed:
+                restore_after = self._should_restore_clipboard(macro)
+                if restore_after:
+                    restore_snapshot = self._capture_clipboard_state()
+                self._set_clipboard_text(text)
+                used_clipboard = True
+                self._auto_paste(macro)
+        elif text:
             self._set_clipboard_text(text)
-        self._auto_paste(macro)
+            used_clipboard = True
+        if used_clipboard and restore_after and restore_snapshot:
+            self._schedule_clipboard_restore(restore_snapshot, macro)
         if not text:
             return
         if secret:
@@ -274,13 +296,18 @@ class MacruntuApp(Gtk.Application):
 
     def _set_clipboard_text(self, text):
         # Update both CLIPBOARD and PRIMARY for terminal paste compatibility.
-        if self.wl_copy_path:
-            self._run_wl_copy(text, primary=False)
-            self._run_wl_copy(text, primary=True)
-        self.clipboard.set_text(text, -1)
-        self.clipboard.store()
-        if self.primary_clipboard:
-            self.primary_clipboard.set_text(text, -1)
+        self._set_clipboard_texts(text, text)
+
+    def _set_clipboard_texts(self, clipboard_text, primary_text):
+        if clipboard_text is not None:
+            if self.wl_copy_path:
+                self._run_wl_copy(clipboard_text, primary=False)
+            self.clipboard.set_text(clipboard_text, -1)
+            self.clipboard.store()
+        if primary_text is not None and self.primary_clipboard:
+            if self.wl_copy_path:
+                self._run_wl_copy(primary_text, primary=True)
+            self.primary_clipboard.set_text(primary_text, -1)
             self.primary_clipboard.store()
 
     def _run_wl_copy(self, text, primary):
@@ -288,6 +315,55 @@ class MacruntuApp(Gtk.Application):
         if primary:
             args.append("--primary")
         subprocess.run(args, input=text, text=True, check=False)
+
+    def _should_restore_clipboard(self, macro):
+        if not macro.get("paste", False):
+            return False
+        value = macro.get("restore_clipboard")
+        if value is None:
+            value = self.config.get("restore_clipboard_after_macro", True)
+        return bool(value)
+
+    def _capture_clipboard_state(self):
+        clipboard_text = self._wait_for_clipboard_text(self.clipboard)
+        primary_text = None
+        if self.primary_clipboard:
+            primary_text = self._wait_for_clipboard_text(self.primary_clipboard)
+        if clipboard_text is None and primary_text is None:
+            return None
+        return {"clipboard": clipboard_text, "primary": primary_text}
+
+    def _wait_for_clipboard_text(self, clipboard):
+        if clipboard is None:
+            return None
+        try:
+            return clipboard.wait_for_text()
+        except Exception:
+            return None
+
+    def _schedule_clipboard_restore(self, snapshot, macro):
+        delay_ms = macro.get("restore_delay_ms")
+        if delay_ms is None:
+            delay_ms = self.config.get("restore_clipboard_delay_ms", 250)
+        try:
+            delay_ms = int(delay_ms)
+        except (TypeError, ValueError):
+            delay_ms = 250
+        paste_delay = macro.get("paste_delay_ms", 150)
+        if isinstance(paste_delay, (int, float)) and paste_delay > 0:
+            delay_ms += int(paste_delay)
+        if delay_ms <= 0:
+            return self._restore_clipboard(snapshot)
+        GLib.timeout_add(delay_ms, self._restore_clipboard, snapshot)
+        return False
+
+    def _restore_clipboard(self, snapshot):
+        if not snapshot:
+            return False
+        clipboard_text = snapshot.get("clipboard")
+        primary_text = snapshot.get("primary")
+        self._set_clipboard_texts(clipboard_text, primary_text)
+        return False
 
     def _auto_paste(self, macro):
         if not macro.get("paste", False):
@@ -328,6 +404,61 @@ class MacruntuApp(Gtk.Application):
                 return False
         if self.ydotool_path:
             self._run_ydotool_key_combo(key_combo)
+        return False
+
+    def _auto_type_text(self, text, macro):
+        if not macro.get("paste", False):
+            return False
+        delay_ms = macro.get("paste_delay_ms", 150)
+        if not self._type_backend_available(macro):
+            return False
+        if isinstance(delay_ms, (int, float)) and delay_ms > 0:
+            GLib.timeout_add(int(delay_ms), self._auto_type_text_timeout, text, macro)
+            return True
+        return self._auto_type_text_now(text, macro)
+
+    def _auto_type_text_timeout(self, text, macro):
+        self._auto_type_text_now(text, macro)
+        return False
+
+    def _auto_type_text_now(self, text, macro):
+        if text is None:
+            return False
+        paste_command = macro.get("paste_command")
+        if paste_command:
+            self._run_command(paste_command)
+            return True
+        backend = macro.get("paste_backend")
+        session = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        if backend == "xdotool" and self.xdotool_path:
+            return self._run_xdotool_type(text)
+        if backend == "wtype" and self.wtype_path:
+            return self._run_wtype_text(text)
+        if backend == "ydotool" and self.ydotool_path:
+            return self._run_ydotool_type(text)
+        if session == "x11" and self.xdotool_path:
+            return self._run_xdotool_type(text)
+        if self.wtype_path:
+            return self._run_wtype_text(text)
+        if self.ydotool_path:
+            return self._run_ydotool_type(text)
+        return False
+
+    def _type_backend_available(self, macro):
+        if macro.get("paste_command"):
+            return True
+        backend = macro.get("paste_backend")
+        session = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        if backend == "xdotool":
+            return bool(self.xdotool_path)
+        if backend == "wtype":
+            return bool(self.wtype_path)
+        if backend == "ydotool":
+            return bool(self.ydotool_path)
+        if session == "x11" and self.xdotool_path:
+            return True
+        if self.wtype_path or self.ydotool_path:
+            return True
         return False
 
     def _parse_key_combo(self, combo):
@@ -453,15 +584,30 @@ class MacruntuApp(Gtk.Application):
                 return 58 + (fn - 1)
         return named.get(key)
 
-    def _run_command(self, command):
+    def _run_command(self, command, input_text=None):
         if isinstance(command, str):
             args = shlex.split(command)
         else:
             args = command
         if not args:
             return 1
-        result = subprocess.run(args, check=False)
+        if input_text is not None:
+            result = subprocess.run(args, input=input_text, text=True, check=False)
+        else:
+            result = subprocess.run(args, check=False)
         return result.returncode
+
+    def _run_wtype_text(self, text):
+        args = [self.wtype_path, "--", text]
+        return self._run_command(args) == 0
+
+    def _run_xdotool_type(self, text):
+        args = [self.xdotool_path, "type", "--clearmodifiers", "--", text]
+        return self._run_command(args) == 0
+
+    def _run_ydotool_type(self, text):
+        args = [self.ydotool_path, "type", "--file", "-"]
+        return self._run_command(args, input_text=text) == 0
 
     def _on_clipboard_text(self, _clipboard, text):
         if text is None:
