@@ -598,7 +598,19 @@ class MacruntuApp(Gtk.Application):
         return result.returncode
 
     def _run_wtype_text(self, text):
-        args = [self.wtype_path, "--", text]
+        args = [
+            self.wtype_path,
+            "-m",
+            "ctrl",
+            "-m",
+            "shift",
+            "-m",
+            "alt",
+            "-m",
+            "super",
+            "--",
+            text,
+        ]
         return self._run_command(args) == 0
 
     def _run_xdotool_type(self, text):
@@ -606,8 +618,22 @@ class MacruntuApp(Gtk.Application):
         return self._run_command(args) == 0
 
     def _run_ydotool_type(self, text):
+        self._ydotool_release_modifiers()
         args = [self.ydotool_path, "type", "--file", "-"]
         return self._run_command(args, input_text=text) == 0
+
+    def _ydotool_release_modifiers(self):
+        if not self.ydotool_path:
+            return
+        codes = [
+            self._ydotool_modifier_code("ctrl"),
+            self._ydotool_modifier_code("shift"),
+            self._ydotool_modifier_code("alt"),
+            self._ydotool_modifier_code("super"),
+        ]
+        sequence = [f"{code}:0" for code in codes if code is not None]
+        if sequence:
+            self._run_command([self.ydotool_path, "key", *sequence])
 
     def _on_clipboard_text(self, _clipboard, text):
         if text is None:
