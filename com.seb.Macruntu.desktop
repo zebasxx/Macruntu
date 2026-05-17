@@ -1,9 +1,10 @@
 [Desktop Entry]
 Name=Macruntu
 Comment=Clipboard macros and history
-Exec=env YDOTOOL_SOCKET=/run/ydotoold/socket python3 /home/seb/Code/GitHub/Macruntu/macruntu.py %u
+Exec=env YDOTOOL_SOCKET=/run/ydotoold/socket python3 /home/seb/Code/GitHubSeba/Macruntu/macruntu.py %u
 Icon=edit-paste
 Type=Application
 Categories=Utility;
 Terminal=false
 StartupWMClass=Macruntu
+MimeType=x-scheme-handler/macruntu;

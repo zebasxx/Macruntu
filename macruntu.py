@@ -42,7 +42,13 @@ def load_config():
             json.dump(DEFAULT_CONFIG, handle, indent=2)
         return DEFAULT_CONFIG
     with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
-        config = json.load(handle)
+        try:
+            config = json.load(handle)
+        except json.JSONDecodeError as error:
+            raise SystemExit(
+                f"Invalid config JSON in {CONFIG_PATH}: "
+                f"line {error.lineno}, column {error.colno}: {error.msg}"
+            ) from error
     if "macros" not in config:
         config["macros"] = DEFAULT_CONFIG["macros"]
     if "autostart" not in config:
@@ -104,7 +110,7 @@ class MacruntuApp(Gtk.Application):
         self.start_hidden = self._has_hidden_flag(args)
         macro_index = self._parse_macro_from_args(args)
         if macro_index is not None:
-            self._apply_macro_index(macro_index)
+            self._apply_launch_macro_index(macro_index)
             return 0
         if self.start_hidden:
             self._ensure_hidden_window()
@@ -117,7 +123,7 @@ class MacruntuApp(Gtk.Application):
             uri = entry.get_uri()
             macro_index = self._parse_macro_from_args([uri])
             if macro_index is not None:
-                self._apply_macro_index(macro_index)
+                self._apply_launch_macro_index(macro_index)
                 return
         self.activate()
 
@@ -249,12 +255,40 @@ class MacruntuApp(Gtk.Application):
             return None
         return index
 
-    def _apply_macro_index(self, index):
+    def _macro_for_index(self, index):
         macros = self.config.get("macros", [])
         if index > len(macros):
+            return None
+        return macros[index - 1]
+
+    def _apply_macro_index(self, index):
+        macro = self._macro_for_index(index)
+        if macro is None:
             return
-        macro = macros[index - 1]
         self._apply_macro(None, macro)
+
+    def _apply_launch_macro_index(self, index):
+        macro = self._macro_for_index(index)
+        if macro is None:
+            return
+        self.hold()
+        self._apply_macro(None, macro)
+        GLib.timeout_add(
+            self._launch_macro_release_delay(macro),
+            self._release_launch_macro_hold,
+        )
+
+    def _launch_macro_release_delay(self, macro):
+        delay_ms = macro.get("paste_delay_ms", 150) if macro.get("paste", False) else 0
+        try:
+            delay_ms = int(delay_ms)
+        except (TypeError, ValueError):
+            delay_ms = 150
+        return max(delay_ms, 0) + 1000
+
+    def _release_launch_macro_hold(self):
+        self.release()
+        return False
 
     def _apply_macro(self, _button, macro):
         text = macro.get("text", "")

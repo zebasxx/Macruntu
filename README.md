@@ -78,9 +78,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ydotoold
 ```
 
-Log out/in to apply the group change, then verify:
+Log out/in to apply the group change. Opening a new terminal is not enough; `id -nG`
+must include `uinput` before ydotool can access the socket. If you want to test
+without logging out, run `newgrp uinput` first.
+
+Then verify:
 
 ```bash
+id -nG
 ls -l /run/ydotoold/socket
 YDOTOOL_SOCKET=/run/ydotoold/socket ydotool key 29:1 47:1 47:0 29:0
 ```
@@ -139,6 +144,7 @@ Copy the desktop file so GNOME can pick up the app icon:
 mkdir -p ~/.local/share/applications
 cp "$(pwd)/com.seb.Macruntu.desktop" ~/.local/share/applications/
 update-desktop-database ~/.local/share/applications
+xdg-mime default com.seb.Macruntu.desktop x-scheme-handler/macruntu
 ```
 
 Launch via the app menu or:
@@ -149,10 +155,43 @@ gtk-launch com.seb.Macruntu
 
 ## Macro shortcuts
 
-You can trigger macros without opening the UI by launching with a macro URI:
+For GNOME custom shortcuts, use the direct command with an absolute path:
+
+```bash
+env YDOTOOL_SOCKET=/run/ydotoold/socket python3 /home/seb/Code/GitHubSeba/Macruntu/macruntu.py --macro 1
+```
+
+That triggers the first macro without opening the UI. By default, triggering a
+macro copies its text to the clipboard, so there may be no visible change until
+you paste manually with `Ctrl+V`. You can confirm it worked with:
+
+```bash
+wl-paste
+```
+
+To make a shortcut type/paste into the currently focused app automatically, add
+`"paste": true` to that macro in `~/.config/macruntu/config.json`:
+
+```json
+{
+  "label": "Username",
+  "text": "sebastian.garcia",
+  "paste": true,
+  "paste_backend": "ydotool"
+}
+```
+
+You can change `--macro 1` to any macro number.
+
+You can also trigger macros through the desktop entry with a macro URI after
+registering the desktop file:
 
 ```bash
 gtk-launch com.seb.Macruntu macruntu://macro/1
 ```
 
-Create a GNOME custom shortcut with that command to bind `Ctrl+1` to the first macro.
+If the URI launch does nothing, verify GNOME knows the handler:
+
+```bash
+gio mime x-scheme-handler/macruntu
+```
