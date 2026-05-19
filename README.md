@@ -125,7 +125,18 @@ Example:
   "restore_delay_ms": 300
 }
 ```
+Past Enter Key:
 
+```json
+{
+  "label": "Enter",
+  "text": "",
+  "paste": true,
+  "paste_keys": "enter",
+  "paste_backend": "ydotool",
+  "paste_delay_ms": 200
+}
+```
 Use the "Start at login" checkbox in the UI to create or remove the GNOME autostart entry. Autostart launches Macruntu hidden in the tray.
 
 ## Shortcut
