@@ -1,0 +1,108 @@
+---
+- name: Install Macruntu GNOME custom keyboard shortcuts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    macruntu_script: /home/seb/Code/4-GitHubSeba/Macruntu/macruntu.py
+    ydotool_socket: /run/ydotoold/socket
+    gnome_media_keys_schema: org.gnome.settings-daemon.plugins.media-keys
+    gnome_shortcut_schema: org.gnome.settings-daemon.plugins.media-keys.custom-keybinding
+    macruntu_shortcuts:
+      - id: macruntu-macro-1
+        name: Macruntu Macro 1
+        macro: 1
+        binding: <Control>grave
+      - id: macruntu-macro-2
+        name: Macruntu Macro 2
+        macro: 2
+        binding: <Control>1
+      - id: macruntu-macro-3
+        name: Macruntu Macro 3
+        macro: 3
+        binding: <Control>2
+      - id: macruntu-macro-4
+        name: Macruntu Macro 4
+        macro: 4
+        binding: <Control>3
+      - id: macruntu-macro-5
+        name: Macruntu Macro 5
+        macro: 5
+        binding: <Control>4
+      - id: macruntu-macro-6
+        name: Macruntu Macro 6
+        macro: 6
+        binding: <Control>e
+
+  tasks:
+    - name: Read existing GNOME custom keyboard shortcuts
+      ansible.builtin.command:
+        argv:
+          - gsettings
+          - get
+          - "{{ gnome_media_keys_schema }}"
+          - custom-keybindings
+      register: existing_custom_keybindings
+      changed_when: false
+
+    - name: Build Macruntu shortcut paths
+      ansible.builtin.set_fact:
+        macruntu_shortcut_paths: "{{ macruntu_shortcuts | map(attribute='id') | map('regex_replace', '^(.*)$', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/\\1/') | list }}"
+
+    - name: Merge Macruntu shortcuts with existing shortcuts
+      ansible.builtin.set_fact:
+        all_custom_keybindings: "{{ (existing_custom_keybindings.stdout | regex_findall(\"'([^']+)'\") + macruntu_shortcut_paths) | unique | list }}"
+
+    - name: Register custom keyboard shortcut paths
+      ansible.builtin.command:
+        argv:
+          - gsettings
+          - set
+          - "{{ gnome_media_keys_schema }}"
+          - custom-keybindings
+          - "{{ all_custom_keybindings | to_json }}"
+      changed_when: true
+
+    - name: Configure Macruntu shortcut names
+      ansible.builtin.command:
+        argv:
+          - gsettings
+          - set
+          - "{{ gnome_shortcut_schema }}:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/{{ item.id }}/"
+          - name
+          - "{{ item.name }}"
+      loop: "{{ macruntu_shortcuts }}"
+      changed_when: true
+
+    - name: Configure Macruntu shortcut commands
+      ansible.builtin.command:
+        argv:
+          - gsettings
+          - set
+          - "{{ gnome_shortcut_schema }}:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/{{ item.id }}/"
+          - command
+          - "env YDOTOOL_SOCKET={{ ydotool_socket }} python3 {{ macruntu_script }} --macro {{ item.macro }}"
+      loop: "{{ macruntu_shortcuts }}"
+      changed_when: true
+
+    - name: Configure Macruntu shortcut bindings
+      ansible.builtin.command:
+        argv:
+          - gsettings
+          - set
+          - "{{ gnome_shortcut_schema }}:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/{{ item.id }}/"
+          - binding
+          - "{{ item.binding }}"
+      loop: "{{ macruntu_shortcuts }}"
+      changed_when: true
+
+    - name: Show shortcut summary
+      ansible.builtin.debug:
+        msg:
+          - "Macruntu Macro 1: Ctrl+`"
+          - "Macruntu Macro 2: Ctrl+1"
+          - "Macruntu Macro 3: Ctrl+2"
+          - "Macruntu Macro 4: Ctrl+3"
+          - "Macruntu Macro 5: Ctrl+4"
+          - "Macruntu Macro 6: Ctrl+e"

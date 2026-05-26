@@ -1,0 +1,217 @@
+---
+- name: Install Macruntu with ydotool support
+  hosts: localhost
+  connection: local
+  become: true
+
+  vars:
+    macruntu_install_dir: /opt/macruntu
+    macruntu_user: "{{ lookup('ansible.builtin.env', 'SUDO_USER') | default(lookup('ansible.builtin.env', 'USER'), true) }}"
+    macruntu_desktop_id: com.seb.Macruntu
+    ydotool_repo: https://github.com/ReimuNotMoe/ydotool.git
+    ydotool_src_dir: /usr/local/src/ydotool
+    ydotool_socket: /run/ydotoold/socket
+
+  pre_tasks:
+    - name: Read desktop user's account details
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ macruntu_user }}"
+
+    - name: Set desktop user home
+      ansible.builtin.set_fact:
+        macruntu_user_home: "{{ ansible_facts.getent_passwd[macruntu_user][4] }}"
+
+  tasks:
+    - name: Install Macruntu and ydotool build dependencies
+      ansible.builtin.apt:
+        name:
+          - python3-gi
+          - gir1.2-gtk-3.0
+          - gir1.2-ayatanaappindicator3-0.1
+          - wl-clipboard
+          - git
+          - build-essential
+          - cmake
+          - pkg-config
+          - libevdev-dev
+          - libudev-dev
+          - scdoc
+        state: present
+        update_cache: true
+
+    - name: Create uinput group
+      ansible.builtin.group:
+        name: uinput
+        state: present
+
+    - name: Add desktop user to uinput group
+      ansible.builtin.user:
+        name: "{{ macruntu_user }}"
+        groups: uinput
+        append: true
+
+    - name: Install uinput udev rule
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/99-uinput.rules
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          KERNEL=="uinput", GROUP="uinput", MODE="0660"
+      notify:
+        - Reload udev rules
+        - Trigger udev
+
+    - name: Check for installed ydotool daemon
+      ansible.builtin.stat:
+        path: /usr/local/bin/ydotoold
+      register: ydotoold_bin
+
+    - name: Clone ydotool source
+      ansible.builtin.git:
+        repo: "{{ ydotool_repo }}"
+        dest: "{{ ydotool_src_dir }}"
+        update: true
+      register: ydotool_source
+
+    - name: Configure ydotool build
+      ansible.builtin.command:
+        cmd: cmake -S . -B build
+        chdir: "{{ ydotool_src_dir }}"
+      when: ydotool_source.changed or not ydotoold_bin.stat.exists
+      changed_when: true
+
+    - name: Build ydotool
+      ansible.builtin.command:
+        cmd: cmake --build build --parallel
+        chdir: "{{ ydotool_src_dir }}"
+      when: ydotool_source.changed or not ydotoold_bin.stat.exists
+      changed_when: true
+
+    - name: Install ydotool
+      ansible.builtin.command:
+        cmd: cmake --install build
+        chdir: "{{ ydotool_src_dir }}"
+      when: ydotool_source.changed or not ydotoold_bin.stat.exists
+      changed_when: true
+      notify:
+        - Restart ydotoold
+
+    - name: Install ydotoold systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ydotoold.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=ydotool daemon
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/local/bin/ydotoold --socket-path={{ ydotool_socket }} --socket-perm=0660
+          Restart=always
+          RestartSec=1
+          User=root
+          Group=uinput
+          RuntimeDirectory=ydotoold
+          RuntimeDirectoryMode=0755
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+        - Restart ydotoold
+
+    - name: Enable ydotoold service
+      ansible.builtin.systemd:
+        name: ydotoold
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Create Macruntu install directory
+      ansible.builtin.file:
+        path: "{{ macruntu_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install Macruntu application
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/macruntu.py"
+        dest: "{{ macruntu_install_dir }}/macruntu.py"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create desktop applications directory
+      ansible.builtin.file:
+        path: "{{ macruntu_user_home }}/.local/share/applications"
+        state: directory
+        owner: "{{ macruntu_user }}"
+        group: "{{ macruntu_user }}"
+        mode: "0755"
+
+    - name: Install Macruntu desktop entry
+      ansible.builtin.copy:
+        dest: "{{ macruntu_user_home }}/.local/share/applications/{{ macruntu_desktop_id }}.desktop"
+        owner: "{{ macruntu_user }}"
+        group: "{{ macruntu_user }}"
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Name=Macruntu
+          Comment=Clipboard macros and history
+          Exec=env YDOTOOL_SOCKET={{ ydotool_socket }} python3 {{ macruntu_install_dir }}/macruntu.py %u
+          Icon=edit-paste
+          Type=Application
+          Categories=Utility;
+          Terminal=false
+          StartupWMClass=Macruntu
+          MimeType=x-scheme-handler/macruntu;
+
+    - name: Register Macruntu URI handler
+      become: false
+      ansible.builtin.command:
+        cmd: xdg-mime default {{ macruntu_desktop_id }}.desktop x-scheme-handler/macruntu
+      environment:
+        XDG_DATA_HOME: "{{ macruntu_user_home }}/.local/share"
+      changed_when: false
+
+    - name: Export ydotool socket for current user systemd session
+      become: false
+      ansible.builtin.command:
+        cmd: systemctl --user set-environment YDOTOOL_SOCKET={{ ydotool_socket }}
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[macruntu_user][1] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Show post-install note
+      ansible.builtin.debug:
+        msg:
+          - "Macruntu is installed at {{ macruntu_install_dir }}/macruntu.py."
+          - "Log out and back in if 'id -nG' does not include the uinput group yet."
+          - "Run with: env YDOTOOL_SOCKET={{ ydotool_socket }} python3 {{ macruntu_install_dir }}/macruntu.py"
+
+  handlers:
+    - name: Reload udev rules
+      ansible.builtin.command: udevadm control --reload-rules
+      changed_when: false
+
+    - name: Trigger udev
+      ansible.builtin.command: udevadm trigger
+      changed_when: false
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart ydotoold
+      ansible.builtin.systemd:
+        name: ydotoold
+        state: restarted
+        daemon_reload: true
